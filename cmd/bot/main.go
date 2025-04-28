@@ -98,12 +98,30 @@ func onButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	case "destroy_yes":
 		pvc := fmt.Sprintf("%s-%s-0", stsName, stsName)
-		err := deletePVC(clientSet, pvc)
-		if err != nil {
-			edit(s, i, "❌ 失敗: "+err.Error())
-		} else {
-			edit(s, i, "✅ PVC "+pvc+" を削除しました")
-		}
+
+		// ❶ 3秒以内に ACK
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseDeferredMessageUpdate, // ←ACK専用
+		})
+
+		// ❷ 削除を非同期で実行
+		go func() {
+			err := deletePVC(clientSet, pvc)
+
+			// 表示用メッセージを組み立て
+			var result string
+			if err != nil {
+				result = "❌ 失敗: " + err.Error()
+			} else {
+				result = "✅ world data: " + pvc + " を削除しました"
+			}
+
+			// ❸ 既存メッセージを上書き（or Follow-up でも可）
+			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content:    &result,
+				Components: &[]discordgo.MessageComponent{},
+			})
+		}()
 	}
 }
 
