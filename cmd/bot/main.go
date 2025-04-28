@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -99,28 +96,14 @@ func onButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	case "destroy_yes":
 		pvc := fmt.Sprintf("%s-%s-0", stsName, stsName)
 
-		// ❶ 3秒以内に ACK
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseDeferredMessageUpdate, // ←ACK専用
-		})
+		// ❶ ユーザへ即時メッセージ更新（3 秒以内）
+		edit(s, i, "🚀 削除リクエストを受け付けました。5分経ってもサーバに入れない場合は管理者に連絡してください。")
 
-		// ❷ 削除を非同期で実行
+		// ❷ 削除は裏で実行。ユーザにはもう通知しない
 		go func() {
-			err := deletePVC(clientSet, pvc)
-
-			// 表示用メッセージを組み立て
-			var result string
-			if err != nil {
-				result = "❌ 失敗: " + err.Error()
-			} else {
-				result = "✅ world data: " + pvc + " を削除しました"
+			if err := deletePVC(clientSet, pvc); err != nil {
+				log.Printf("PVC delete failed: %v", err) // ログにだけ残す
 			}
-
-			// ❸ 既存メッセージを上書き（or Follow-up でも可）
-			_, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content:    &result,
-				Components: &[]discordgo.MessageComponent{},
-			})
 		}()
 	}
 }
@@ -129,32 +112,9 @@ func onButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 // PVC 削除 ＋ 完全消滅確認
 func deletePVC(cs kubernetes.Interface, pvcName string) error {
-	// ❶ Delete
-	if err := cs.CoreV1().
+	return cs.CoreV1().
 		PersistentVolumeClaims(ns).
-		Delete(context.TODO(), pvcName, metav1.DeleteOptions{}); err != nil {
-
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("PVC %s はすでに存在しません", pvcName)
-		}
-		return err
-	}
-
-	// ❷ NotFound になるまでポーリング
-	return wait.PollImmediate(1*time.Second, 15*time.Second, func() (bool, error) {
-		_, err := cs.CoreV1().
-			PersistentVolumeClaims(ns).
-			Get(context.TODO(), pvcName, metav1.GetOptions{})
-
-		switch {
-		case apierrors.IsNotFound(err):
-			return true, nil
-		case err != nil:
-			return false, err
-		default:
-			return false, nil
-		}
-	})
+		Delete(context.TODO(), pvcName, metav1.DeleteOptions{})
 }
 
 // ========== Helpers ==================================================
